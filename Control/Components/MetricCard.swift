@@ -27,6 +27,8 @@ struct MetricCard: View {
                     .font(ControlTypography.caption)
                     .foregroundStyle(ControlColors.inkSecondary)
                     .multilineTextAlignment(.center)
+                    .lineLimit(label.contains(" ") ? 2 : 1)
+                    .minimumScaleFactor(0.7)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }

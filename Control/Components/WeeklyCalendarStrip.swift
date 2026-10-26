@@ -1,17 +1,28 @@
 import SwiftUI
 
 /// 本周日期条：星期 + 日期，今天用深青绿色块标出，有真实完成记录的日子下方显示小圆点。
-/// 用在渐变背景的深色区域，文字为白色。
+/// 每一天都可以点击，查看当天的训练记录。用在渐变背景的深色区域，文字为白色。
 struct WeeklyCalendarStrip: View {
     let days: [Date]
     let calendar: Calendar
     let hasSession: (Date) -> Bool
+    var onSelect: (Date) -> Void = { _ in }
 
     var body: some View {
         HStack(spacing: ControlSpacing.space1) {
-            ForEach(days, id: \.self) { day in
+            ForEach(Array(days.enumerated()), id: \.offset) { index, day in
+                let isToday = calendar.isDateInToday(day)
                 dayCell(day)
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, minHeight: ControlSpacing.hitTargetMin)
+                    .contentShape(Rectangle())
+                    .onTapGesture { onSelect(day) }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityLabel(day.formatted(.dateTime.weekday(.wide).month(.wide).day()
+                        .locale(calendar.locale ?? .current)) + (isToday ? ", today" : ""))
+                    .accessibilityValue(hasSession(day) ? "Session completed" : "No session")
+                    .accessibilityHint("Shows sessions for this day")
+                    .accessibilityIdentifier("homeDay-\(index)")
             }
         }
     }
@@ -42,10 +53,7 @@ struct WeeklyCalendarStrip: View {
                     .shadow(color: ControlColors.brandDeep.opacity(0.35), radius: 8, y: 4)
             }
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(day.formatted(.dateTime.weekday(.wide).month(.wide).day()
-            .locale(calendar.locale ?? .current)) + (isToday ? ", today" : ""))
-        .accessibilityValue(trained ? "Session completed" : "No session")
+        .accessibilityHidden(true)
     }
 }
 

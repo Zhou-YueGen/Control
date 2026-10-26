@@ -6,6 +6,14 @@ struct HomeView: View {
     let template: TrainingTemplate?
     let gate: AppRouter.GateResult
     let onStartTraining: () -> Void
+    var onOpenProgress: () -> Void = {}
+
+    @State private var selectedDay: SelectedDay?
+
+    private struct SelectedDay: Identifiable, Equatable {
+        let date: Date
+        var id: String { SessionStore.dayKey(for: date, calendar: .controlDefault) }
+    }
 
     private var calendar: Calendar { store.calendar }
     private var locale: Locale { calendar.locale ?? Locale(identifier: "en_US") }
@@ -15,7 +23,8 @@ struct HomeView: View {
             VStack(alignment: .leading, spacing: ControlSpacing.space6) {
                 header
                 WeeklyCalendarStrip(days: store.week(containing: .now), calendar: calendar,
-                                    hasSession: store.hasSession(on:))
+                                    hasSession: store.hasSession(on:),
+                                    onSelect: { selectedDay = SelectedDay(date: $0) })
                 TodaySessionCard(template: template, gate: gate,
                                  completedToday: store.sessionsCount(on: .now),
                                  onStart: onStartTraining)
@@ -29,6 +38,11 @@ struct HomeView: View {
         }
         .fadesUnderStatusBar()
         .background(ControlGradientBackground(theme: .home))
+        .sheet(item: $selectedDay) { day in
+            DayDetailSheet(day: day.date, store: store, onOpenProgress: onOpenProgress)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
     }
 
     // MARK: - Header
@@ -74,16 +88,35 @@ struct HomeView: View {
 
         return GlassCard {
             VStack(alignment: .leading, spacing: ControlSpacing.space3) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text("Weekly Progress")
-                        .font(ControlTypography.cardTitle)
-                        .foregroundStyle(ControlColors.inkPrimary)
-                        .accessibilityAddTraits(.isHeader)
-                    Spacer()
+                HStack(alignment: .center, spacing: ControlSpacing.space2) {
+                    Button(action: onOpenProgress) {
+                        Text("Weekly Progress")
+                            .font(ControlTypography.cardTitle)
+                            .foregroundStyle(ControlColors.inkPrimary)
+                            .frame(maxWidth: .infinity, minHeight: ControlSpacing.hitTargetMin, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Opens your progress")
+                    .accessibilityIdentifier("weeklyProgressHeader")
+
                     Text("\(trainedCount) / 7 days")
                         .font(ControlTypography.secondary.monospacedDigit())
                         .foregroundStyle(ControlColors.inkSecondary)
+                        .padding(.vertical, ControlSpacing.space3)
+                        .contentShape(Rectangle())
+                        .onTapGesture(perform: onOpenProgress)
                         .accessibilityIdentifier("weeklyProgressCount")
+
+                    Button(action: onOpenProgress) {
+                        Image(systemName: "chevron.right")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(ControlColors.inkSecondary)
+                            .frame(width: ControlSpacing.hitTargetMin, height: ControlSpacing.hitTargetMin)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open progress")
                 }
 
                 ZStack {
@@ -92,10 +125,15 @@ struct HomeView: View {
                         .frame(height: 2)
                         .padding(.horizontal, ControlSpacing.space5)
                         .offset(y: -9)
+                        .allowsHitTesting(false)
                     HStack(spacing: 0) {
-                        ForEach(days, id: \.self) { day in
+                        ForEach(Array(days.enumerated()), id: \.offset) { index, day in
                             progressDot(day)
-                                .frame(maxWidth: .infinity)
+                                .frame(maxWidth: .infinity, minHeight: ControlSpacing.hitTargetMin)
+                                .contentShape(Rectangle())
+                                .onTapGesture { selectedDay = SelectedDay(date: day) }
+                                .accessibilityAddTraits(.isButton)
+                                .accessibilityIdentifier("weeklyDot-\(index)")
                         }
                     }
                 }
@@ -137,6 +175,7 @@ struct HomeView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(day.formatted(.dateTime.weekday(.wide).locale(locale)))
         .accessibilityValue(trained ? "Session completed" : "No session")
+        .accessibilityHint("Shows sessions for this day")
     }
 
     // MARK: - Summary
@@ -170,7 +209,7 @@ struct HomeView: View {
 }
 
 #Preview("Home · With tab bar") {
-    RootTabView(router: AppRouter())
+    RootTabView(router: .previewOnboarded())
 }
 
 #Preview("Home · New user") {

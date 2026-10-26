@@ -1,13 +1,5 @@
 import SwiftUI
 
-/// Learn / Progress / Settings 的临时空白页，正式内容在后续阶段实现。
-struct BlankTabView: View {
-    var body: some View {
-        Color(.systemBackground)
-            .ignoresSafeArea(edges: .top)
-    }
-}
-
 /// Train Tab（P0）：唯一的基础训练入口，与首页共用同一个训练守卫。
 struct TrainEntryView: View {
     let template: TrainingTemplate?
@@ -61,10 +53,6 @@ struct TrainEntryView: View {
         .font(ControlTypography.body)
         .accessibilityElement(children: .combine)
     }
-}
-
-#Preview("Blank") {
-    BlankTabView()
 }
 
 #Preview("Train") {

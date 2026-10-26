@@ -1,25 +1,25 @@
-import AudioToolbox
 import SwiftUI
 
 /// 全屏训练页（参考图第 5 屏）。计时与状态全部来自 TrainingEngine，页面只负责显示和转发操作。
 struct TrainingView: View {
-    @Bindable var store: SessionStore
+    @Bindable var preferences: PreferencesStore
     let sessionID: UUID
     var onCompleted: (SessionSummary) -> Void
     var onExit: () -> Void
 
     @State private var engine: TrainingEngine
+    @State private var voiceGuide = VoiceGuide()
     @State private var isShowingEndConfirmation = false
     @Environment(\.scenePhase) private var scenePhase
 
     init(
         template: TrainingTemplate,
-        store: SessionStore,
+        preferences: PreferencesStore,
         sessionID: UUID,
         onCompleted: @escaping (SessionSummary) -> Void,
         onExit: @escaping () -> Void
     ) {
-        self.store = store
+        self.preferences = preferences
         self.sessionID = sessionID
         self.onCompleted = onCompleted
         self.onExit = onExit
@@ -27,6 +27,15 @@ struct TrainingView: View {
     }
 
     private var template: TrainingTemplate { engine.template }
+
+    /// 阶段开始时播报阶段名，之后每秒播报剩余秒数。
+    private var currentPhaseLength: Int {
+        switch engine.phase {
+        case .preparing: Int(engine.preparationSeconds)
+        case .contract: template.contractionSeconds
+        case .relax: template.relaxationSeconds
+        }
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -67,6 +76,7 @@ struct TrainingView: View {
         }
         .background(ControlGradientBackground(theme: .training))
         .onChange(of: engine.status) { _, newStatus in
+            if newStatus != .running { voiceGuide.stop() }
             if newStatus == .completed, let summary = engine.makeSummary(id: sessionID) {
                 onCompleted(summary)
             }
@@ -75,13 +85,26 @@ struct TrainingView: View {
             if newPhase != .active { engine.pause() }
         }
         .onChange(of: engine.phaseCueCount) {
-            if store.soundEnabled { AudioServicesPlaySystemSound(1103) }
-            AccessibilityNotification.Announcement(phaseTitle).post()
+            if preferences.soundEnabled {
+                voiceGuide.announce(engine.phase)
+            } else {
+                AccessibilityNotification.Announcement(phaseTitle).post()
+            }
+        }
+        .onChange(of: engine.phaseRemainingSeconds) { _, seconds in
+            guard preferences.soundEnabled, engine.status == .running, seconds < currentPhaseLength else { return }
+            voiceGuide.count(seconds)
+        }
+        .onChange(of: preferences.soundEnabled) { _, isEnabled in
+            if !isEnabled { voiceGuide.stop() }
         }
         .sensoryFeedback(trigger: engine.phaseCueCount) { _, _ in
-            store.hapticsEnabled ? .impact(weight: .medium) : nil
+            preferences.hapticsEnabled ? .impact(weight: .medium) : nil
         }
-        .onDisappear { engine.stop() }
+        .onDisappear {
+            engine.stop()
+            voiceGuide.stop()
+        }
         .alert("End session?", isPresented: $isShowingEndConfirmation) {
             Button("Continue training", role: .cancel) {}
             Button("End session", role: .destructive) {
@@ -121,13 +144,13 @@ struct TrainingView: View {
             .frame(maxWidth: .infinity)
 
             HStack(spacing: 0) {
-                iconButton(store.soundEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill",
-                           label: "Sound guidance", value: store.soundEnabled ? "On" : "Off") {
-                    store.soundEnabled.toggle()
+                iconButton(preferences.soundEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill",
+                           label: "Sound guidance", value: preferences.soundEnabled ? "On" : "Off") {
+                    preferences.soundEnabled.toggle()
                 }
-                iconButton(store.hapticsEnabled ? "iphone.radiowaves.left.and.right" : "iphone.slash",
-                           label: "Haptic feedback", value: store.hapticsEnabled ? "On" : "Off") {
-                    store.hapticsEnabled.toggle()
+                iconButton(preferences.hapticsEnabled ? "iphone.radiowaves.left.and.right" : "iphone.slash",
+                           label: "Haptic feedback", value: preferences.hapticsEnabled ? "On" : "Off") {
+                    preferences.hapticsEnabled.toggle()
                 }
             }
             .frame(width: ControlSpacing.hitTargetMin * 2)
@@ -319,6 +342,6 @@ struct TrainingView: View {
 }
 
 #Preview("Training") {
-    TrainingView(template: .demoStandard, store: SessionStore(), sessionID: UUID(),
+    TrainingView(template: .demoStandard, preferences: .inMemory(), sessionID: UUID(),
                  onCompleted: { _ in }, onExit: {})
 }

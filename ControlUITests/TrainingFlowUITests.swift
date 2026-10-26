@@ -8,7 +8,7 @@ final class TrainingFlowUITests: XCTestCase {
         continueAfterFailure = false
         XCUIDevice.shared.orientation = .portrait
         app = XCUIApplication()
-        app.launchArguments = ["-UITestFastTraining"]
+        app.launchArguments = ["-UITestFastTraining", "-UITestOnboardingDone"]
         app.launch()
     }
 

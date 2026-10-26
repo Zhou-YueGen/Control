@@ -171,69 +171,219 @@ struct SessionStoreTests {
         #expect(store.currentStreak() == 2)
     }
 
-    @Test func discomfortSetsTrainingHold() {
+    @Test func feedbackIsSavedOnlyForRecordedSessions() {
         let store = SessionStore()
-        store.recordCompleted(.preview)
-        store.saveFeedback(SessionFeedback(difficulty: .easy, discomfort: .no), for: SessionSummary.preview.id)
-        #expect(store.trainingHold == false)
+        #expect(store.saveFeedback(SessionFeedback(difficulty: .easy), for: SessionSummary.preview.id) == false)
 
-        store.saveFeedback(SessionFeedback(difficulty: nil, discomfort: .yes), for: SessionSummary.preview.id)
-        #expect(store.trainingHold == true)
+        store.recordCompleted(.preview)
+        #expect(store.saveFeedback(SessionFeedback(difficulty: .easy, discomfort: .no), for: SessionSummary.preview.id))
+        #expect(store.saveFeedback(SessionFeedback(discomfort: .yes), for: SessionSummary.preview.id))
         #expect(store.feedbackBySession.count == 1)
+        #expect(store.feedbackBySession[SessionSummary.preview.id]?.discomfort == .yes)
     }
 }
 
 @MainActor
 struct AppRouterTests {
-    @Test func completedSessionIsRecordedOnceAndFeedbackSaved() throws {
-        let router = AppRouter(template: .uiTestFast, allowsDemoTemplates: true)
-        #expect(router.startTraining())
-        #expect(router.startTraining() == false)
+    private func onboardedRouter(hasTemplate: Bool = true, allowsDemo: Bool = true) -> AppRouter {
+        let preferences = PreferencesStore.inMemory()
+        preferences.markOnboardingDoneForTesting()
+        return AppRouter(preferences: preferences, template: hasTemplate ? .uiTestFast : nil,
+                         allowsDemoTemplates: allowsDemo)
+    }
 
-        guard case .training(let sessionID) = router.trainingStep else {
-            Issue.record("Expected training step")
-            return
-        }
-        let summary = SessionSummary(id: sessionID, templateID: "t", templateTitle: "T",
-                                     activeDurationSeconds: 8, completedRepetitions: 2,
-                                     totalRepetitions: 2, completedAt: .now)
-        router.finishTraining(with: summary)
-        router.finishTraining(with: summary)
+    private func finishSession(_ router: AppRouter) -> UUID? {
+        guard router.startTraining(), case .training(let sessionID) = router.trainingStep else { return nil }
+        router.finishTraining(with: SessionSummary(id: sessionID, templateID: "t", templateTitle: "T",
+                                                   activeDurationSeconds: 8, completedRepetitions: 2,
+                                                   totalRepetitions: 2, completedAt: .now))
+        return sessionID
+    }
+
+    @Test func completedSessionIsRecordedOnceAndFeedbackSaved() throws {
+        let router = onboardedRouter()
+        let sessionID = try #require(finishSession(router))
+        #expect(router.startTraining() == false)
+        router.finishTraining(with: SessionSummary(id: sessionID, templateID: "t", templateTitle: "T",
+                                                   activeDurationSeconds: 8, completedRepetitions: 2,
+                                                   totalRepetitions: 2, completedAt: .now))
         #expect(router.store.totalSessions == 1)
 
         router.saveAndContinue(feedback: SessionFeedback(difficulty: .comfortable, discomfort: DiscomfortAnswer.no))
         router.saveAndContinue(feedback: SessionFeedback(difficulty: .tooHard, discomfort: .yes))
         #expect(router.trainingStep == nil)
         #expect(router.store.feedbackBySession[sessionID]?.difficulty == .comfortable)
-        #expect(router.store.trainingHold == false)
+        #expect(router.preferences.trainingHold == false)
+    }
+
+    @Test func reportingDiscomfortSetsHoldAndBlocksTraining() throws {
+        let router = onboardedRouter()
+        _ = try #require(finishSession(router))
+        router.saveAndContinue(feedback: SessionFeedback(discomfort: .yes))
+
+        #expect(router.preferences.trainingHold)
+        #expect(router.trainingGate() == .blocked(reason: AppRouter.GateMessage.hold))
+        #expect(router.startTraining() == false)
     }
 
     @Test func exitingTrainingRecordsNothing() {
-        let router = AppRouter(template: .uiTestFast, allowsDemoTemplates: true)
+        let router = onboardedRouter()
         router.startTraining()
         router.exitTraining()
         #expect(router.trainingStep == nil)
         #expect(router.store.totalSessions == 0)
     }
 
-    @Test func gateBlocksDuringTrainingHold() {
-        let router = AppRouter(template: .uiTestFast, allowsDemoTemplates: true)
-        router.store.recordCompleted(.preview)
-        router.store.saveFeedback(SessionFeedback(discomfort: .yes), for: SessionSummary.preview.id)
-
-        #expect(router.trainingGate() != .allowed)
-        #expect(router.startTraining() == false)
-        #expect(router.trainingStep == nil)
-    }
-
     @Test func gateBlocksUnreviewedTemplateInRelease() {
-        let router = AppRouter(template: .uiTestFast, allowsDemoTemplates: false)
-        #expect(router.trainingGate() == .blocked(reason: "Training is not available yet."))
+        let router = onboardedRouter(allowsDemo: false)
+        #expect(router.trainingGate() == .blocked(reason: AppRouter.GateMessage.noTemplate))
         #expect(router.startTraining() == false)
     }
 
     @Test func gateBlocksMissingTemplate() {
-        let router = AppRouter(template: nil, allowsDemoTemplates: true)
+        #expect(onboardedRouter(hasTemplate: false).startTraining() == false)
+    }
+
+    @Test func gateChecksOnboardingInDocumentedOrder() {
+        let router = AppRouter(preferences: .inMemory(), template: .uiTestFast, allowsDemoTemplates: true)
+        let preferences = router.preferences
+        #expect(router.trainingGate() == .blocked(reason: AppRouter.GateMessage.adultsOnly))
+
+        preferences.adultConfirmed = true
+        #expect(router.trainingGate() == .blocked(reason: AppRouter.GateMessage.safetyCheckNeeded))
+
+        preferences.safetyAccessStatus = .educationOnly
+        #expect(router.trainingGate() == .blocked(reason: AppRouter.GateMessage.educationOnly))
+
+        preferences.safetyAccessStatus = .noPredefinedFlag
+        #expect(router.trainingGate() == .blocked(reason: AppRouter.GateMessage.basicsNeeded))
+
+        preferences.basicEducationCompleted = true
+        preferences.onboardingCompleted = true
+        #expect(router.trainingGate() == .allowed)
+    }
+}
+
+@MainActor
+struct SafetyScreeningTests {
+    private func answers(age: SafetyAnswer = .yes, risk: SafetyAnswer = .no) -> [SafetyQuestion.ID: SafetyAnswer] {
+        var result = [SafetyScreening.ageQuestion.id: age]
+        for question in SafetyScreening.riskQuestions { result[question.id] = risk }
+        return result
+    }
+
+    @Test func adultWithNoFlagsGoesToBasics() {
+        #expect(SafetyScreening.evaluate(answers: answers(), goal: .improveControl) == .learnBasics)
+    }
+
+    @Test func underageIsEducationOnly() {
+        #expect(SafetyScreening.evaluate(answers: answers(age: .no), goal: .improveControl) == .educationOnly(.underage))
+    }
+
+    @Test func anyYesOrPreferNotToSayIsEducationOnly() {
+        for answer in [SafetyAnswer.yes, .preferNotToSay] {
+            for question in SafetyScreening.riskQuestions {
+                var values = answers()
+                values[question.id] = answer
+                #expect(SafetyScreening.evaluate(answers: values, goal: .improveControl) == .educationOnly(.riskAnswer))
+            }
+        }
+    }
+
+    @Test func unansweredQuestionIsTreatedConservatively() {
+        var values = answers()
+        values[SafetyScreening.riskQuestions[0].id] = nil
+        #expect(SafetyScreening.isComplete(values) == false)
+        #expect(SafetyScreening.evaluate(answers: values, goal: .improveControl) == .educationOnly(.riskAnswer))
+        #expect(SafetyScreening.evaluate(answers: [:], goal: .improveControl) == .educationOnly(.underage))
+    }
+
+    @Test func recoveryGoalIsEducationOnly() {
+        #expect(SafetyScreening.evaluate(answers: answers(), goal: .recoveryInformation) == .educationOnly(.recoveryGoal))
+    }
+}
+
+@MainActor
+struct OnboardingTests {
+    @Test func preferencesPersistAcrossInstances() throws {
+        let suite = "control.tests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let first = PreferencesStore(defaults: defaults)
+        #expect(first.onboardingStep == .welcome)
+        #expect(first.soundEnabled)
+        first.markOnboardingDoneForTesting()
+        first.trainingHold = true
+        first.soundEnabled = false
+
+        let second = PreferencesStore(defaults: defaults)
+        #expect(second.onboardingCompleted)
+        #expect(second.onboardingStep == .finished)
+        #expect(second.primaryGoal == .improveControl)
+        #expect(second.safetyAccessStatus == .noPredefinedFlag)
+        #expect(second.trainingHold)
+        #expect(second.soundEnabled == false)
+        #expect(second.hapticsEnabled)
+    }
+
+    @Test func happyPathUnlocksTraining() {
+        let router = AppRouter(preferences: .inMemory(), template: .uiTestFast, allowsDemoTemplates: true)
+        router.completeWelcome()
+        #expect(router.preferences.onboardingStep == .goals)
+        router.selectGoal(.improveControl)
+        #expect(router.preferences.onboardingStep == .safetyCheck)
+
+        var answers = [SafetyScreening.ageQuestion.id: SafetyAnswer.yes]
+        for question in SafetyScreening.riskQuestions { answers[question.id] = .no }
+        #expect(router.submitSafety(answers: answers) == .learnBasics)
+        #expect(router.preferences.onboardingStep == .learnBasics)
+        #expect(router.preferences.onboardingCompleted == false)
+
+        router.completeBasics()
+        #expect(router.preferences.onboardingCompleted)
+        #expect(router.preferences.basicEducationCompleted)
+        #expect(router.trainingGate() == .allowed)
+    }
+
+    @Test func riskPathCompletesOnboardingInEducationMode() {
+        let router = AppRouter(preferences: .inMemory(), template: .uiTestFast, allowsDemoTemplates: true)
+        router.selectGoal(.generalPelvicHealth)
+        var answers = [SafetyScreening.ageQuestion.id: SafetyAnswer.yes]
+        for question in SafetyScreening.riskQuestions { answers[question.id] = .no }
+        answers[SafetyScreening.riskQuestions[1].id] = .yes
+
+        #expect(router.submitSafety(answers: answers) == .educationOnly(.riskAnswer))
+        #expect(router.preferences.onboardingStep == .safetyNotice)
+
+        router.completeBasics()
+        #expect(router.preferences.basicEducationCompleted == false)
+
+        router.acknowledgeSafetyNotice()
+        #expect(router.preferences.onboardingCompleted)
+        #expect(router.preferences.basicEducationCompleted == false)
+        #expect(router.trainingGate() == .blocked(reason: AppRouter.GateMessage.educationOnly))
         #expect(router.startTraining() == false)
+    }
+
+    @Test func underageIsNotAdultConfirmed() {
+        let router = AppRouter(preferences: .inMemory(), template: .uiTestFast, allowsDemoTemplates: true)
+        router.selectGoal(.improveControl)
+        var answers = [SafetyScreening.ageQuestion.id: SafetyAnswer.no]
+        for question in SafetyScreening.riskQuestions { answers[question.id] = .no }
+        router.submitSafety(answers: answers)
+        router.acknowledgeSafetyNotice()
+
+        #expect(router.preferences.adultConfirmed == false)
+        #expect(router.trainingGate() == .blocked(reason: AppRouter.GateMessage.adultsOnly))
+    }
+
+    @Test func resumePathMatchesSavedStep() {
+        let preferences = PreferencesStore.inMemory()
+        #expect(OnboardingFlowView.initialPath(for: preferences).isEmpty)
+        preferences.onboardingStep = .safetyCheck
+        #expect(OnboardingFlowView.initialPath(for: preferences) == [.goals, .safetyCheck])
+        preferences.onboardingStep = .safetyNotice
+        #expect(OnboardingFlowView.initialPath(for: preferences) == [.safetyNotice(.underage)])
     }
 }

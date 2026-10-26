@@ -47,3 +47,12 @@ extension SessionStore {
         return store
     }
 }
+
+extension AppRouter {
+    /// Preview-only：已完成首次引导、可以开始训练的 Router。
+    static func previewOnboarded() -> AppRouter {
+        let preferences = PreferencesStore.inMemory()
+        preferences.markOnboardingDoneForTesting()
+        return AppRouter(preferences: preferences)
+    }
+}

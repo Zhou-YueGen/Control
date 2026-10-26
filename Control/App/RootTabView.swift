@@ -9,11 +9,12 @@ struct RootTabView: View {
 
         TabView(selection: $router.selectedTab) {
             HomeView(store: router.store, template: router.template, gate: gate,
-                     onStartTraining: { router.startTraining() })
+                     onStartTraining: { router.startTraining() },
+                     onOpenProgress: { router.selectedTab = .progress })
                 .tabItem { Label("Home", systemImage: "house.fill") }
                 .tag(AppRouter.Tab.home)
 
-            BlankTabView()
+            LearnView()
                 .tabItem { Label("Learn", systemImage: "book.closed") }
                 .tag(AppRouter.Tab.learn)
 
@@ -22,11 +23,11 @@ struct RootTabView: View {
                 .tabItem { Label("Train", systemImage: "play.circle") }
                 .tag(AppRouter.Tab.train)
 
-            BlankTabView()
+            TrainingProgressView(store: router.store)
                 .tabItem { Label("Progress", systemImage: "chart.bar") }
                 .tag(AppRouter.Tab.progress)
 
-            BlankTabView()
+            SettingsView(router: router)
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(AppRouter.Tab.settings)
         }
@@ -46,7 +47,7 @@ struct RootTabView: View {
             if let template = router.template {
                 TrainingView(
                     template: template,
-                    store: router.store,
+                    preferences: router.preferences,
                     sessionID: sessionID,
                     onCompleted: router.finishTraining(with:),
                     onExit: router.exitTraining
@@ -63,5 +64,5 @@ struct RootTabView: View {
 }
 
 #Preview("Root") {
-    RootTabView(router: AppRouter())
+    RootTabView(router: .previewOnboarded())
 }
